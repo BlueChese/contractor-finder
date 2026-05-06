@@ -3,30 +3,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./lib/supabaseClient";
 
-async function parseSearchWithAI(text) {
-    try {
-        const res = await fetch("/api/ai-parse", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ text }),
-        });
-
-        const data = await res.json();
-
-        if (!res.ok || data.error) {
-            console.error("AI parse failed:", data.error);
-            return null;
-        }
-
-        return data;
-    } catch (error) {
-        console.error("AI parse request failed:", error);
-        return null;
-    }
-}
-
 const categories = [
     "Auto Detect",
     "Room / Remodel",
@@ -52,7 +28,6 @@ const searchSuggestions = [
     "bathroom remodel",
     "shippable matte black railing",
     "black door knob",
-    "brushed nickel door knob",
     "cheap black railing under 200",
     "bulk 2x4x8 lumber in stock",
     "pickup white outlet cover",
@@ -556,83 +531,42 @@ export default function Home() {
         setSuggestionStatus("Suggestion sent. Thank you!");
     }
 
-    async function getAIProjectEstimate(projectName, category) {
-        try {
-            const res = await fetch("/api/ai-estimate", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    projectName,
-                    category,
-                    color: projectColorFilter,
-                    finish: projectFinishFilter,
-                    material: projectMaterialFilter,
-                }),
-            });
+    function addSuggestedMaterialsToProject(project = activeProject) {
+        if (!project) return;
 
-            const data = await res.json();
+        const breakdown = getMaterialBreakdown(project.name, project.type);
+        const materials =
+            breakdown.items.length > 0
+                ? breakdown.items
+                : getProjectTemplate(project.name, project.type).items;
 
-            if (!res.ok || data.error) {
-                console.error("AI estimate failed:", data.error);
-                return null;
-            }
-
-            return data;
-        } catch (error) {
-            console.error("AI estimate request failed:", error);
-            return null;
-        }
-    }
-
-    function convertAIMaterialsToProjectItems(materials) {
-        return (materials || []).map((material, index) => ({
-            id: `ai-${Date.now()}-${index}`,
-            name: material.name,
-            store: "AI Estimate",
-            price: Number(material.estimatedUnitCost || 0),
+        const suggestedItems = materials.map((material, index) => ({
+            id: `suggested-${Date.now()}-${index}`,
+            name: material,
+            store: "Suggested Material",
+            price: 0,
             rating: 0,
             reviews: 0,
             link: "#",
             image: "",
-            delivery: material.notes || "Estimated project material",
-            quantity: Number(material.quantity || 1),
-            unit: material.unit || "",
-            searchTerm: material.searchTerm || material.name,
+            delivery: "Suggested project material",
+            quantity: 1,
+            unit: "",
+            searchTerm: material,
         }));
-    }
-    async function autoGrabMaterialsForProject(project = activeProject) {
-        if (!project) return;
-
-        setSaveStatus("AI is building the material list...");
-
-        const estimate = await getAIProjectEstimate(project.name, project.type);
-
-        if (!estimate) {
-            setSaveStatus("AI estimate failed.");
-            return;
-        }
-
-        const aiItems = convertAIMaterialsToProjectItems(estimate.materials);
 
         const updatedProjects = projects.map((p) => {
             if (p.id !== project.id) return p;
 
             return {
                 ...p,
-                estimateLow: estimate.estimateLow,
-                estimateHigh: estimate.estimateHigh,
-                suggestedItems: estimate.materials.map((m) => m.searchTerm || m.name),
-                items: aiItems,
+                suggestedItems: materials,
+                items: suggestedItems,
             };
         });
 
         setProjects(updatedProjects);
-
-        const updatedProject = updatedProjects.find((p) => p.id === project.id);
-        setSaveStatus("AI materials added. Click Save Project.");
-        setActiveProjectId(updatedProject.id);
+        setSaveStatus("Suggested materials added. Click Save Project.");
     }
 
     function addCardToHome(card) {
@@ -684,55 +618,35 @@ export default function Home() {
     async function createProject() {
         if (!projectName.trim()) return;
 
-        setSaveStatus("AI is estimating project...");
-
         const finalType =
             projectType === "Auto Detect" ? detectCategory(projectName) : projectType;
 
-        const aiEstimate = await getAIProjectEstimate(projectName, finalType);
+        const template = getProjectTemplate(projectName, finalType);
 
-        let newProject;
+        let suggestedItems = template.items;
 
-        if (aiEstimate) {
-            const aiItems = convertAIMaterialsToProjectItems(aiEstimate.materials);
-
-            newProject = {
-                id: `local-${Date.now()}`,
-                name: projectName,
-                type: aiEstimate.category || finalType,
-                estimateLow: aiEstimate.estimateLow,
-                estimateHigh: aiEstimate.estimateHigh,
-                suggestedItems: aiEstimate.materials.map((m) => m.searchTerm || m.name),
-                items: aiItems,
-            };
-        } else {
-            const template = getProjectTemplate(projectName, finalType);
-
-            let suggestedItems = template.items;
-
-            if (projectColorFilter || projectFinishFilter || projectMaterialFilter) {
-                suggestedItems = suggestedItems.map((item) =>
-                    `${projectColorFilter} ${projectFinishFilter} ${projectMaterialFilter} ${item}`
-                        .replace(/\s+/g, " ")
-                        .trim()
-                );
-            }
-
-            newProject = {
-                id: `local-${Date.now()}`,
-                name: projectName,
-                type: finalType,
-                estimateLow: template.low,
-                estimateHigh: template.high,
-                suggestedItems,
-                items: [],
-            };
+        if (projectColorFilter || projectFinishFilter || projectMaterialFilter) {
+            suggestedItems = suggestedItems.map((item) =>
+                `${projectColorFilter} ${projectFinishFilter} ${projectMaterialFilter} ${item}`
+                    .replace(/\s+/g, " ")
+                    .trim()
+            );
         }
+
+        const newProject = {
+            id: `local-${Date.now()}`,
+            name: projectName,
+            type: finalType,
+            estimateLow: template.low,
+            estimateHigh: template.high,
+            suggestedItems,
+            items: [],
+        };
 
         setProjects([...projects, newProject]);
         setActiveProjectId(newProject.id);
         setProjectName("");
-        setSaveStatus("Project created with AI materials. Click Save Project.");
+        setSaveStatus("Project created. Click Save Project.");
         setActivePage("projects");
     }
 
@@ -798,7 +712,6 @@ export default function Home() {
     function removeItem(id) {
         updateActiveProjectItems((items) => items.filter((item) => item.id !== id));
     }
-
     function autoFillFiltersFromSearch(text) {
         const lowerText = text.toLowerCase();
 
@@ -858,13 +771,18 @@ export default function Home() {
         if (foundSize) setSizeFilter(foundSize);
 
         const roomMatch = lowerText.match(/(\d+)\s*x\s*(\d+)\s*x\s*(\d+)/);
+
         if (roomMatch && detected === "Room / Remodel") {
             const length = Number(roomMatch[1]);
             const width = Number(roomMatch[2]);
             const height = Number(roomMatch[3]);
+
             const floorArea = length * width;
             const wallArea = 2 * (length + width) * height;
-            setSizeFilter(`${floorArea} sq ft floor / ${wallArea} sq ft walls`);
+
+            setSizeFilter(
+                `${floorArea} sq ft floor / ${wallArea} sq ft walls`
+            );
         }
 
         const underMatch = lowerText.match(/under\s*\$?(\d+)/);
@@ -893,74 +811,50 @@ export default function Home() {
 
         setLoading(true);
 
-        const aiParse = await parseSearchWithAI(search);
+        autoFillFiltersFromSearch(search);
 
-        let finalSearchQuery = search;
+        const helper = getMaterialBreakdown(search, category);
+        setMaterialHelper(helper);
 
-        if (aiParse) {
-            setCategory(aiParse.category || "Auto Detect");
+        const finalSearchQuery = buildSmartSearchQuery(search, category, {
+            colorFilter,
+            finishFilter,
+            sizeFilter,
+            materialFilter,
+            categorySpecificFilter,
+        });
 
-            if (aiParse.filters?.color) setColorFilter(aiParse.filters.color);
-            if (aiParse.filters?.finish) setFinishFilter(aiParse.filters.finish);
-            if (aiParse.filters?.size) setSizeFilter(aiParse.filters.size);
-            if (aiParse.filters?.material) setMaterialFilter(aiParse.filters.material);
-            if (aiParse.filters?.maxPrice)
-                setMaxPrice(String(aiParse.filters.maxPrice));
-            if (aiParse.filters?.minRating)
-                setMinRating(String(aiParse.filters.minRating));
+        try {
+            const productRes = await fetch(
+                `/api/search?q=${encodeURIComponent(
+                    finalSearchQuery
+                )}&zip=${encodeURIComponent(zip)}`
+            );
 
-            if (aiParse.filters?.inStock) setInStockOnly(true);
-            if (aiParse.filters?.shippable) setShippableOnly(true);
-            if (aiParse.filters?.bulk) setBulkOnly(true);
-            if (aiParse.filters?.pickup) setPickupOnly(true);
+            const productData = await productRes.json();
 
-            if (aiParse.intent === "project") {
-                setMaterialHelper({
-                    category: aiParse.category,
-                    items: aiParse.suggestedMaterials || [],
-                    starterSearch: aiParse.starterSearch || aiParse.searchQuery,
-                    isProjectSearch: true,
-                });
+            let storeData = [];
 
-                finalSearchQuery =
-                    aiParse.starterSearch || aiParse.searchQuery || search;
-            } else {
-                setMaterialHelper(null);
-                finalSearchQuery = aiParse.searchQuery || search;
+            try {
+                const storeRes = await fetch(
+                    `/api/stores?q=${encodeURIComponent(
+                        finalSearchQuery
+                    )}&zip=${encodeURIComponent(zip)}`
+                );
+
+                storeData = await storeRes.json();
+            } catch (storeError) {
+                console.error("Store fetch failed:", storeError);
             }
-        } else {
-            autoFillFiltersFromSearch(search);
 
-            const helper = getMaterialBreakdown(search, category);
-            setMaterialHelper(helper);
-
-            finalSearchQuery = buildSmartSearchQuery(search, category, {
-                colorFilter,
-                finishFilter,
-                sizeFilter,
-                materialFilter,
-                categorySpecificFilter,
-            });
+            setResults(productData || []);
+            setStores(storeData || []);
+            setLoading(false);
+            setActivePage("search");
+        } catch (err) {
+            console.error("Search failed:", err);
+            setLoading(false);
         }
-
-        const productRes = await fetch(
-            `/api/search?q=${encodeURIComponent(
-                finalSearchQuery
-            )}&zip=${encodeURIComponent(zip)}`
-        );
-        const productData = await productRes.json();
-
-        const storeRes = await fetch(
-            `/api/stores?q=${encodeURIComponent(
-                finalSearchQuery
-            )}&zip=${encodeURIComponent(zip)}`
-        );
-        const storeData = await storeRes.json();
-
-        setResults(productData);
-        setStores(storeData);
-        setLoading(false);
-        setActivePage("search");
     }
 
     async function searchMaterial(material) {
@@ -968,16 +862,22 @@ export default function Home() {
         setMaterialHelper(getMaterialBreakdown(material, category));
         setLoading(true);
 
-        const productRes = await fetch(
-            `/api/search?q=${encodeURIComponent(material)}&zip=${encodeURIComponent(
-                zip
-            )}`
-        );
-        const productData = await productRes.json();
+        try {
+            const productRes = await fetch(
+                `/api/search?q=${encodeURIComponent(
+                    material
+                )}&zip=${encodeURIComponent(zip)}`
+            );
 
-        setResults(productData);
-        setLoading(false);
-        setActivePage("search");
+            const productData = await productRes.json();
+
+            setResults(productData || []);
+            setLoading(false);
+            setActivePage("search");
+        } catch (err) {
+            console.error("Material search failed:", err);
+            setLoading(false);
+        }
     }
 
     function clearFilters() {
@@ -1006,7 +906,8 @@ export default function Home() {
                 ? product.price && product.price <= Number(maxPrice)
                 : true;
 
-            const ratingOk = Number(product.rating || 0) >= Number(minRating);
+            const ratingOk =
+                Number(product.rating || 0) >= Number(minRating);
 
             const colorOk = colorFilter
                 ? text.includes(colorFilter.toLowerCase())
@@ -1025,11 +926,14 @@ export default function Home() {
                 : true;
 
             const storeOk = storeFilter
-                ? product.store.toLowerCase().includes(storeFilter.toLowerCase())
+                ? product.store
+                    .toLowerCase()
+                    .includes(storeFilter.toLowerCase())
                 : true;
 
             const inStockOk = inStockOnly
-                ? text.includes("in stock") || text.includes("available")
+                ? text.includes("in stock") ||
+                text.includes("available")
                 : true;
 
             const shippableOk = shippableOnly
@@ -1045,7 +949,8 @@ export default function Home() {
                 : true;
 
             const pickupOk = pickupOnly
-                ? text.includes("pickup") || text.includes("store pickup")
+                ? text.includes("pickup") ||
+                text.includes("store pickup")
                 : true;
 
             return (
@@ -1063,14 +968,21 @@ export default function Home() {
             );
         })
         .sort((a, b) => {
-            if (sortBy === "priceLow") return (a.price || 0) - (b.price || 0);
-            if (sortBy === "priceHigh") return (b.price || 0) - (a.price || 0);
-            if (sortBy === "ratingHigh") return (b.rating || 0) - (a.rating || 0);
+            if (sortBy === "priceLow")
+                return (a.price || 0) - (b.price || 0);
+
+            if (sortBy === "priceHigh")
+                return (b.price || 0) - (a.price || 0);
+
+            if (sortBy === "ratingHigh")
+                return (b.rating || 0) - (a.rating || 0);
+
             return 0;
         });
 
     const savedTotal = savedItems.reduce(
-        (total, item) => total + Number(item.price || 0) * item.quantity,
+        (total, item) =>
+            total + Number(item.price || 0) * item.quantity,
         0
     );
 
@@ -1081,9 +993,11 @@ export default function Home() {
 
     const allProjectsTotal = projects.reduce((total, project) => {
         const projectTotal = project.items.reduce(
-            (sum, item) => sum + Number(item.price || 0) * item.quantity,
+            (sum, item) =>
+                sum + Number(item.price || 0) * item.quantity,
             0
         );
+
         return total + projectTotal;
     }, 0);
 
@@ -1091,7 +1005,9 @@ export default function Home() {
         return (
             <main className="min-h-screen flex items-center justify-center bg-neutral-950 text-white p-6">
                 <div className="bg-neutral-900 p-8 rounded-2xl w-full max-w-md shadow-xl">
-                    <h1 className="text-3xl font-bold mb-2">ContractorFind</h1>
+                    <h1 className="text-3xl font-bold mb-2">
+                        ContractorFind
+                    </h1>
 
                     <p className="text-neutral-400 mb-6">
                         {authMode === "login"
@@ -1115,7 +1031,9 @@ export default function Home() {
                     />
 
                     {authError && (
-                        <p className="text-red-400 text-sm mb-3">{authError}</p>
+                        <p className="text-red-400 text-sm mb-3">
+                            {authError}
+                        </p>
                     )}
 
                     <button
@@ -1127,7 +1045,9 @@ export default function Home() {
 
                     <button
                         onClick={() =>
-                            setAuthMode(authMode === "login" ? "signup" : "login")
+                            setAuthMode(
+                                authMode === "login" ? "signup" : "login"
+                            )
                         }
                         className="w-full mt-3 text-neutral-400 hover:text-white text-sm"
                     >
@@ -1484,7 +1404,6 @@ export default function Home() {
             </section>
         );
     }
-
     return (
         <main className="bg-neutral-950 text-white min-h-screen p-6">
             <div className="max-w-7xl mx-auto">
@@ -1493,7 +1412,7 @@ export default function Home() {
                         <div>
                             <h1 className="text-3xl font-bold">ContractorFind</h1>
                             <p className="text-neutral-400">
-                                Dashboard, projects, price tracking, stores, and AI product search.
+                                Dashboard, projects, price tracking, stores, and smart product search.
                             </p>
 
                             {user?.email && (
@@ -1556,6 +1475,7 @@ export default function Home() {
                                             <p>Project: {activeProject?.name}</p>
                                             <p>Items: {savedCount}</p>
                                             <p>Total: ${savedTotal.toFixed(2)}</p>
+
                                             <button
                                                 onClick={() => setActivePage("projects")}
                                                 className="bg-orange-500 px-3 py-2 rounded-xl mt-2"
@@ -1573,6 +1493,7 @@ export default function Home() {
                                                 className="w-full bg-neutral-800 p-3 rounded-xl outline-none mb-3"
                                                 placeholder="Quick search..."
                                             />
+
                                             <button
                                                 onClick={searchProducts}
                                                 className="w-full bg-orange-500 p-2 rounded-xl"
@@ -1695,10 +1616,10 @@ export default function Home() {
                                 </p>
 
                                 <button
-                                    onClick={() => autoGrabMaterialsForProject(activeProject)}
+                                    onClick={() => addSuggestedMaterialsToProject(activeProject)}
                                     className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-xl font-bold mb-4"
                                 >
-                                    Auto Grab AI Materials
+                                    Auto Grab Suggested Materials
                                 </button>
 
                                 <p className="text-neutral-400 mb-3">Suggested Materials</p>
@@ -1722,7 +1643,7 @@ export default function Home() {
 
                         <ProjectCart />
                     </>
-                )}
+                )}\
                 {activePage === "search" && (
                     <>
                         <section className="bg-neutral-900 p-5 rounded-2xl mb-6">
@@ -1942,6 +1863,106 @@ export default function Home() {
                             </aside>
                         </div>
                     </>
+                )}
+
+                {activePage === "prices" && (
+                    <section>
+                        <h2 className="text-2xl font-bold mb-4">Price Tracker</h2>
+
+                        {trackedItems.length === 0 && (
+                            <p className="text-neutral-400">
+                                No tracked items yet. Go to Search and click Track on a product.
+                            </p>
+                        )}
+
+                        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
+                            {trackedItems.map((item) => (
+                                <div key={item.id} className="bg-neutral-900 p-5 rounded-2xl">
+                                    <h3 className="font-bold mb-2">{item.name}</h3>
+                                    <p className="text-sm text-neutral-400">{item.store}</p>
+
+                                    <p className="text-orange-400 font-bold mt-2">
+                                        Current: ${item.price || "N/A"}
+                                    </p>
+
+                                    <p className="text-sm">
+                                        Start price: ${item.startPrice || "N/A"}
+                                    </p>
+
+                                    <p className="text-sm">Added: {item.dateAdded}</p>
+
+                                    <input
+                                        value={item.targetPrice}
+                                        onChange={(e) =>
+                                            setTrackedItems(
+                                                trackedItems.map((tracked) =>
+                                                    tracked.id === item.id
+                                                        ? { ...tracked, targetPrice: e.target.value }
+                                                        : tracked
+                                                )
+                                            )
+                                        }
+                                        className="w-full bg-neutral-800 p-2 rounded-xl mt-3"
+                                        placeholder="Target price"
+                                    />
+
+                                    <div className="flex gap-2 mt-3">
+                                        <a
+                                            href={item.link}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="bg-neutral-700 p-2 rounded-xl w-full text-center"
+                                        >
+                                            View
+                                        </a>
+
+                                        <button
+                                            onClick={() => removeTrackedItem(item.id)}
+                                            className="bg-red-600 p-2 rounded-xl w-full"
+                                        >
+                                            Remove
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                )}
+
+                {activePage === "stores" && (
+                    <section>
+                        <h2 className="text-2xl font-bold mb-4">Stores</h2>
+
+                        {stores.length === 0 && (
+                            <p className="text-neutral-400">
+                                Search a product first to load nearby stores.
+                            </p>
+                        )}
+
+                        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
+                            {stores.map((store) => (
+                                <div key={store.id} className="bg-neutral-900 p-5 rounded-2xl">
+                                    <h3 className="font-bold">{store.name}</h3>
+                                    <p className="text-sm text-neutral-400">{store.address}</p>
+                                    <p className="text-sm">
+                                        ⭐ {store.rating} ({store.reviews})
+                                    </p>
+                                    <p className="text-sm">{store.phone}</p>
+
+                                    {store.website && (
+                                        <a
+                                            href={store.website}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="block bg-neutral-700 p-2 rounded-xl text-center mt-3"
+                                        >
+                                            Website
+                                        </a>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </section>
                 )}
 
                 {activePage === "suggestions" && (
